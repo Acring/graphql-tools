@@ -28,7 +28,7 @@ import {
   SetArgs,
   TypePolicy,
 } from './types.js';
-import { makeRef, randomListLength, takeRandom, uuidv4 } from './utils.js';
+import { get, has, makeRef, randomListLength, takeRandom, uuidv4 } from './utils.js';
 
 export const defaultMocks = {
   Int: () => Math.round(Math.random() * 200) - 100,
@@ -229,25 +229,45 @@ export class MockStore implements IMockStore {
       if (defaultValue !== undefined) {
         value = defaultValue;
       } else if (this.isKeyField(typeName, fieldName)) {
+        // 处理普通键字段
         value = key;
       } else {
-        value = this.generateFieldValue(
-          typeName,
-          fieldName,
-          fieldArgs,
-          (otherFieldName, otherValue) => {
-            // if we get a key field in the mix we don't care
-            if (this.isKeyField(typeName, otherFieldName)) return;
+        // 处理嵌套路径键字段的可能性
+        const keyFieldName = this.getKeyFieldName(typeName);
+        if (keyFieldName && keyFieldName.includes('.')) {
+          const keyParts = keyFieldName.split('.');
+          if (keyParts[0] === fieldName) {
+            // 当访问的是包含嵌套键的字段（如 'spec'），我们需要返回一个包含嵌套键值的对象
+            const nestedObj: any = {};
+            let current = nestedObj;
+            for (let i = 1; i < keyParts.length - 1; i++) {
+              current[keyParts[i]] = {};
+              current = current[keyParts[i]];
+            }
+            current[keyParts[keyParts.length - 1]] = key;
+            value = nestedObj;
+          }
+        }
 
-            this.set({
-              typeName,
-              key,
-              fieldName: otherFieldName,
-              value: otherValue,
-              noOverride: true,
-            });
-          },
-        );
+        if (value === undefined) {
+          value = this.generateFieldValue(
+            typeName,
+            fieldName,
+            fieldArgs,
+            (otherFieldName, otherValue) => {
+              // if we get a key field in the mix we don't care
+              if (this.isKeyField(typeName, otherFieldName)) return;
+
+              this.set({
+                typeName,
+                key,
+                fieldName: otherFieldName,
+                value: otherValue,
+                noOverride: true,
+              });
+            },
+          );
+        }
       }
 
       this.set({ typeName, key, fieldName, fieldArgs, value, noOverride: true });
@@ -297,7 +317,19 @@ export class MockStore implements IMockStore {
 
     const fieldNameInStore: string = getFieldNameInStore(fieldName, fieldArgs);
 
-    if (this.isKeyField(typeName, fieldName) && value !== key) {
+    const keyFieldName = this.getKeyFieldName(typeName);
+    if (keyFieldName && keyFieldName.includes('.') && fieldName === keyFieldName.split('.')[0]) {
+      // 处理嵌套键字段，例如 'spec.id'
+      // 在这种情况下，我们设置的是包含嵌套键的对象（例如 'spec'）
+      if (isRecord(value) && has(value, keyFieldName.split('.').slice(1).join('.'))) {
+        const nestedKeyValue = get(value, keyFieldName.split('.').slice(1).join('.'));
+        if (nestedKeyValue !== key) {
+          throw new Error(
+            `Field ${keyFieldName} is a key field of ${typeName} and you are trying to set it to ${nestedKeyValue} in nested path while the key is ${key}`,
+          );
+        }
+      }
+    } else if (this.isKeyField(typeName, fieldName) && value !== key) {
       throw new Error(
         `Field ${fieldName} is a key field of ${typeName} and you are trying to set it to ${value} while the key is ${key}`,
       );
@@ -411,8 +443,10 @@ export class MockStore implements IMockStore {
 
     if (isRef<KeyT>(values)) {
       key = values.$ref.key;
-    } else if (keyFieldName && keyFieldName in values) {
-      key = values[keyFieldName] as KeyT;
+    } else if (keyFieldName && has(values, keyFieldName)) {
+      // 支持嵌套路径（如 'spec.id'）作为键字段名
+      // 使用 get 函数来处理嵌套路径的获取
+      key = get(values, keyFieldName) as KeyT;
     } else {
       key = this.generateKeyForType<KeyT>(typeName, (otherFieldName, otherFieldValue) => {
         otherValues[otherFieldName] = otherFieldValue;
@@ -636,7 +670,12 @@ export class MockStore implements IMockStore {
   }
 
   private isKeyField(typeName: string, fieldName: string) {
-    return this.getKeyFieldName(typeName) === fieldName;
+    const keyFieldName = this.getKeyFieldName(typeName);
+    // 如果 keyFieldName 包含点号，说明是嵌套路径，只比较第一级
+    if (keyFieldName && keyFieldName.includes('.')) {
+      return keyFieldName.split('.')[0] === fieldName;
+    }
+    return keyFieldName === fieldName;
   }
 
   private getKeyFieldName(typeName: string): string | null {

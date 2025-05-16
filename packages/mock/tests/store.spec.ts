@@ -668,4 +668,130 @@ describe('MockStore', () => {
       });
     });
   });
+
+  describe('nested path keyFieldName', () => {
+    const typeDefs = /* GraphQL */ `
+      type Resource {
+        spec: ResourceSpec!
+        metadata: ResourceMetadata!
+      }
+
+      type ResourceSpec {
+        id: ID!
+        name: String!
+      }
+
+      type ResourceMetadata {
+        createdAt: String!
+      }
+
+      type Query {
+        getResource(id: ID!): Resource!
+      }
+    `;
+
+    const schema = buildSchema(typeDefs);
+
+    it('should support nested path keyFieldName', () => {
+      const store = createMockStore({
+        schema,
+        typePolicies: {
+          Resource: {
+            keyFieldName: 'spec.id',
+          },
+        },
+      });
+
+      // 使用嵌套路径设置资源
+      store.set('Resource', 'resource-1', {
+        spec: {
+          id: 'resource-1',
+          name: '测试资源',
+        },
+        metadata: {
+          createdAt: '2023-01-01',
+        },
+      });
+
+      // 验证可以通过键获取资源
+      expect(store.has('Resource', 'resource-1')).toBe(true);
+
+      // 验证嵌套路径中的键值已正确设置
+      const resourceSpec = store.get('Resource', 'resource-1', 'spec') as Ref;
+      expect(store.get(resourceSpec, 'id')).toBe('resource-1');
+      expect(store.get(resourceSpec, 'name')).toBe('测试资源');
+    });
+
+    it('should prevent setting nested key fields that do not match the key', () => {
+      const store = createMockStore({
+        schema,
+        typePolicies: {
+          Resource: {
+            keyFieldName: 'spec.id',
+          },
+        },
+      });
+
+      // 尝试设置与键不匹配的嵌套键字段应该抛出错误
+      expect(() => {
+        store.set('Resource', 'resource-1', {
+          spec: {
+            id: 'wrong-id', // 与资源键不匹配
+            name: '测试资源',
+          },
+        });
+      }).toThrow();
+    });
+
+    it('should support multi-level nested paths', () => {
+      const nestedTypeDefs = /* GraphQL */ `
+        type DeepResource {
+          metadata: DeepMetadata!
+        }
+
+        type DeepMetadata {
+          spec: DeepSpec!
+        }
+
+        type DeepSpec {
+          data: DeepData!
+        }
+
+        type DeepData {
+          id: ID!
+          value: String!
+        }
+      `;
+
+      const nestedSchema = buildSchema(nestedTypeDefs);
+
+      const store = createMockStore({
+        schema: nestedSchema,
+        typePolicies: {
+          DeepResource: {
+            keyFieldName: 'metadata.spec.data.id',
+          },
+        },
+      });
+
+      // 设置具有深度嵌套路径的资源
+      store.set('DeepResource', 'deep-id', {
+        metadata: {
+          spec: {
+            data: {
+              id: 'deep-id',
+              value: '深度嵌套值',
+            },
+          },
+        },
+      });
+
+      // 验证可以通过键获取资源
+      expect(store.has('DeepResource', 'deep-id')).toBe(true);
+
+      const metadata = store.get('DeepResource', 'deep-id', 'metadata') as Ref;
+      expect(store.get(metadata, ['spec', 'data', 'id'])).toBe('deep-id');
+      expect(store.get(metadata, ['spec', 'data', 'value'])).toBe('深度嵌套值');
+    });
+  });
 });

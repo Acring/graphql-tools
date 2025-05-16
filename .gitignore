@@ -79,3 +79,5 @@ website/out/
 website/public/_pagefind/
 
 .mise.toml
+
+.history
